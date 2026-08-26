@@ -3265,19 +3265,21 @@ class TPUModelRunner(KVConnectorModelRunnerMixin, LoRAModelRunnerMixin):
             else:
                 hs_sharding = NamedSharding(self.mesh, PartitionSpec())
 
-        if self.dp_size > 1:
-            res_sharding = NamedSharding(
-                self.mesh, PartitionSpec(ShardingAxisName.ATTN_DATA, None))
-        else:
-            res_sharding = NamedSharding(self.mesh, PartitionSpec())
-
         hs_spec = jax.ShapeDtypeStruct(shape=hs_shape,
                                        dtype=jax_dtype,
                                        sharding=hs_sharding)
-        res_spec = jax.ShapeDtypeStruct(shape=(num_padded_tokens, hidden_size),
-                                        dtype=jax_dtype,
-                                        sharding=res_sharding)
-        tensor_spec = {"hidden_states": hs_spec, "residual": res_spec}
+        if hc_mult:
+            tensor_spec = {"hidden_states": hs_spec}
+        else:
+            if self.dp_size > 1:
+                res_sharding = NamedSharding(
+                    self.mesh, PartitionSpec(ShardingAxisName.ATTN_DATA, None))
+            else:
+                res_sharding = NamedSharding(self.mesh, PartitionSpec())
+            res_spec = jax.ShapeDtypeStruct(shape=(num_padded_tokens, hidden_size),
+                                            dtype=jax_dtype,
+                                            sharding=res_sharding)
+            tensor_spec = {"hidden_states": hs_spec, "residual": res_spec}
         return tensor_spec
 
     def get_uuid_for_jax_transfer(self,
