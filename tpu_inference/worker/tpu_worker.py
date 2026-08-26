@@ -582,21 +582,30 @@ class TPUWorker(WorkerBase):
             # receive intermediate tensors
             uuid = self.model_runner.get_uuid_for_jax_transfer(
                 scheduler_output, self.rank - 1, self.step_counter)
-            # TODO: this method might only works for vllm model, not sure about jax models.
             tensor_spec = self.model_runner.get_intermediate_tensor_spec(
                 scheduler_output)
+            logger.info(f"[PP Debug] Rank {self.rank} receiving intermediate tensors with uuid={uuid} spec={tensor_spec}")
             intermediate_tensors_dict = get_pp_group().recv_tensor_dict(
                 uuid, tensor_spec)
+            logger.info(f"[PP Debug] Rank {self.rank} successfully received intermediate tensors")
             intermediate_tensors = JaxIntermediateTensors(
                 intermediate_tensors_dict)
 
+        logger.info(f"[PP Debug] Rank {self.rank} executing model runner")
         output = self.model_runner.execute_model(scheduler_output,
                                                  intermediate_tensors)
+        logger.info(f"[PP Debug] Rank {self.rank} model runner execution finished, output type: {type(output)}")
 
         if isinstance(output, JaxIntermediateTensors):
             assert self.parallel_config.pipeline_parallel_size > 1
             assert not get_pp_group().is_last_rank
             # send intermediate tensors
+            try:
+                for k, v in output.tensors.items():
+                    v.block_until_ready()
+                logger.info(f"[PP Debug] Rank {self.rank} forward intermediate tensors block_until_ready() SUCCEEDED!")
+            except Exception as e:
+                logger.error(f"[PP Debug] Rank {self.rank} forward intermediate tensors block_until_ready() FAILED: {e}")
             uuid = self.model_runner.get_uuid_for_jax_transfer(
                 scheduler_output, self.rank, self.step_counter)
             get_pp_group().send_tensor_dict(uuid, output.tensors)

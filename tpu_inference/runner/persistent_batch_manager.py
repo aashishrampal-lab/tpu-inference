@@ -227,7 +227,10 @@ class PersistentBatchManager:
                 # When using PP, the scheduler sends the sampled tokens back,
                 # because there's no direct communication between the first-
                 # stage worker and the last-stage worker.
-                new_token_ids = req_data.new_token_ids[i]
+                if not req_data.new_token_ids:
+                    new_token_ids = []
+                else:
+                    new_token_ids = req_data.new_token_ids[i]
                 # Add the sampled token(s) from the previous step (if any).
                 # This doesn't include "unverified" tokens like spec tokens.
                 num_new_tokens = (num_computed_tokens + len(new_token_ids) -
@@ -275,14 +278,21 @@ class PersistentBatchManager:
             # For the last rank, we don't need to update the token_ids_cpu
             # because the sampled tokens are already cached.
             if not self.is_last_rank:
-                start_token_index = num_computed_tokens
-                end_token_index = num_computed_tokens + len(new_token_ids)
-                self.input_batch.token_ids_cpu[
-                    req_index,
-                    start_token_index:end_token_index] = new_token_ids
-                self.input_batch.num_tokens_no_spec[
-                    req_index] = end_token_index
-                self.input_batch.num_tokens[req_index] = end_token_index
+                start_token_index = self.input_batch.num_tokens_no_spec[req_index]
+                end_token_index = max(
+                    start_token_index,
+                    num_computed_tokens + len(new_token_ids),
+                )
+                if end_token_index > start_token_index:
+                    if new_token_ids:
+                        num_new_tokens = end_token_index - start_token_index
+                        tokens_to_append = new_token_ids[-num_new_tokens:]
+                        self.input_batch.token_ids_cpu[
+                            req_index,
+                            start_token_index:end_token_index] = tokens_to_append
+                    self.input_batch.num_tokens_no_spec[
+                        req_index] = end_token_index
+                    self.input_batch.num_tokens[req_index] = end_token_index
 
             # Add spec_token_ids to token_ids_cpu.
             spec_token_ids = scheduler_output.scheduled_spec_decode_tokens.get(
