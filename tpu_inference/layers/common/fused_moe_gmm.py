@@ -17,7 +17,7 @@ from typing import Literal
 
 import jax
 from jax import numpy as jnp
-from jax.sharding import Mesh, NamedSharding
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 try:
     from tokamax._src.ops.experimental.gmm_v2.gmm_v2 import gmm_v2
 except ImportError:
