@@ -465,6 +465,9 @@ class TPUWorker(WorkerBase):
                 self.topology_order_id = get_device_topology_order_id(
                     jax.local_devices(), jax.devices())
 
+        self.is_first_rank = is_first_rank
+        self.is_last_rank = is_last_rank
+
         self.model_runner = TPUModelRunner(self.vllm_config, self.devices,
                                            self.rank, is_first_rank,
                                            is_last_rank)
@@ -582,7 +585,6 @@ class TPUWorker(WorkerBase):
             # receive intermediate tensors
             uuid = self.model_runner.get_uuid_for_jax_transfer(
                 scheduler_output, self.rank - 1, self.step_counter)
-            # TODO: this method might only works for vllm model, not sure about jax models.
             tensor_spec = self.model_runner.get_intermediate_tensor_spec(
                 scheduler_output)
             intermediate_tensors_dict = get_pp_group().recv_tensor_dict(
@@ -608,7 +610,7 @@ class TPUWorker(WorkerBase):
             # TODO(mrjunwan): Figure out if this is ok after https://github.com/vllm-project/vllm/pull/26866
             if has_kv_transfer_group():
                 return output
-            return output if self.is_driver_worker else None
+            return output if (self.is_driver_worker or self.is_last_rank) else None
 
     def sample_tokens(self,
                       grammar_output: GrammarOutput) -> ModelRunnerOutput:
