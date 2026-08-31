@@ -672,6 +672,50 @@ class CompilationManager:
             num_spec_tokens=num_spec_tokens,
         )
 
+    def _create_dummy_intermediate_tensors(
+        self,
+        num_tokens: int,
+        hidden_size: int,
+    ) -> JaxIntermediateTensors:
+        """Create dummy PP intermediate tensors for precompilation.
+
+        Uses the model's `make_empty_intermediate_tensors` when available
+        (e.g. DeepSeek-V4's 3D `(num_tokens, hc_mult, hidden_size)` tensor),
+        falling back to standard 2D `hidden_states` + `residual` tensors for
+        JAX models.
+        """
+        wrapper_model = getattr(getattr(self.runner, "model", None), "model",
+                                None)
+        vllm_model = getattr(wrapper_model, "vllm_model", None)
+        make_empty_fn = getattr(vllm_model, "make_empty_intermediate_tensors",
+                                None)
+        if callable(make_empty_fn):
+            import torch
+            empty_it = make_empty_fn(
+                batch_size=num_tokens,
+                dtype=torch.bfloat16,
+                device=torch.device("cpu"),
+            )
+            tensor_shapes = {
+                name: tuple(tensor.shape)
+                for name, tensor in empty_it.tensors.items()
+            }
+        else:
+            tensor_shapes = {
+                "hidden_states": (num_tokens, hidden_size),
+                "residual": (num_tokens, hidden_size),
+            }
+
+        tensors = {}
+        for name, shape in tensor_shapes.items():
+            spec = PartitionSpec(ShardingAxisName.ATTN_DATA,
+                                 *([None] * (len(shape) - 1)))
+            sharding = NamedSharding(self.runner.mesh, spec)
+            tensors[name] = self._create_dummy_tensor(shape,
+                                                      jnp.bfloat16,
+                                                      sharding=sharding)
+        return JaxIntermediateTensors(tensors=tensors)
+
     def _precompile_backbone_text_only(self) -> None:
         hidden_size = self.runner.model_config.get_hidden_size()
         for num_tokens in self.runner.num_tokens_paddings:
@@ -697,22 +741,9 @@ class CompilationManager:
                 if is_first_rank:
                     intermediate_tensors = None
                 else:
-                    sharding = NamedSharding(
-                        self.runner.mesh,
-                        PartitionSpec(ShardingAxisName.ATTN_DATA, None))
-                    hidden_states = self._create_dummy_tensor(
-                        (num_tokens, hidden_size),
-                        jnp.bfloat16,
-                        sharding=sharding)
-                    residual = self._create_dummy_tensor(
-                        (num_tokens, hidden_size),
-                        jnp.bfloat16,
-                        sharding=sharding)
-                    intermediate_tensors = JaxIntermediateTensors(
-                        tensors={
-                            "hidden_states": hidden_states,
-                            "residual": residual
-                        })
+                    intermediate_tensors = (
+                        self._create_dummy_intermediate_tensors(
+                            num_tokens, hidden_size))
                 for _cache_pages in self._pcp_cache_page_buckets():
                     self._precompile_backbone_helper(
                         f"worker{self.runner.rank} backbone",
@@ -773,19 +804,9 @@ class CompilationManager:
                 is_first_rank = self.runner.is_first_rank
                 is_last_rank = self.runner.is_last_rank
                 if not is_first_rank:
-                    hidden_states = self._create_dummy_tensor(
-                        (num_tokens, hidden_size),
-                        jnp.bfloat16,
-                        sharding=sharding)
-                    residual = self._create_dummy_tensor(
-                        (num_tokens, hidden_size),
-                        jnp.bfloat16,
-                        sharding=sharding)
-                    intermediate_tensors = JaxIntermediateTensors(
-                        tensors={
-                            "hidden_states": hidden_states,
-                            "residual": residual
-                        })
+                    intermediate_tensors = (
+                        self._create_dummy_intermediate_tensors(
+                            num_tokens, hidden_size))
                 else:
                     intermediate_tensors = None
                 self._precompile_backbone_helper(
