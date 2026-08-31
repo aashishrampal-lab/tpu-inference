@@ -203,8 +203,15 @@ class TPUWorker(WorkerBase):
         self.devices = devices if devices is not None else []
         self.device_ranks = set(device.id for device in self.devices
                                 if isinstance(device, jaxlib._jax.Device))
-        self.pp_config = PPConfig(vllm_config, rank, ip, prev_worker_ip,
-                                  self.parallel_config.pipeline_parallel_size)
+        w_ip = os.environ.get("TPU_PP_WORKER_IP", ip)
+        p_ip = os.environ.get("TPU_PP_PREV_WORKER_IP", prev_worker_ip)
+        self.pp_config = PPConfig(
+            vllm_config,
+            rank,
+            w_ip,
+            p_ip,
+            self.parallel_config.pipeline_parallel_size,
+        )
 
         # If model_weights is set, and we are in a distributed environment on Ray,
         # the driver might have overwritten `model` to its local cache path.
